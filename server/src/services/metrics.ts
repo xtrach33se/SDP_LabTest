@@ -4,6 +4,27 @@ import { MetricResult, AuthorMetric, FilterOptions } from '../types';
 
 type Db = ReturnType<typeof getDb>;
 
+const directoryMetricCache = new Map<string, MetricResult>();
+const MAX_DIRECTORY_CACHE_ENTRIES = 500;
+
+export function clearMetricCache(repoId?: number): void {
+  if (repoId == null) {
+    directoryMetricCache.clear();
+    return;
+  }
+  for (const key of directoryMetricCache.keys()) {
+    if (key.startsWith(`${repoId}:`)) directoryMetricCache.delete(key);
+  }
+}
+
+function rememberDirectoryMetric(key: string, result: MetricResult): void {
+  if (directoryMetricCache.size >= MAX_DIRECTORY_CACHE_ENTRIES) {
+    const oldest = directoryMetricCache.keys().next().value as string | undefined;
+    if (oldest) directoryMetricCache.delete(oldest);
+  }
+  directoryMetricCache.set(key, result);
+}
+
 // ─── Commit set resolution ────────────────────────────────────────────────────
 
 /**
@@ -291,9 +312,11 @@ export function computeDirectoryMetrics(
   if (!filter.path) throw new Error('path is required for directory metrics');
   const db = getDb();
   const { commitIds, setSize } = resolveCommitIds(repoId, filter);
+  const dirPath = filter.path.replace(/\/$/, '');
+  const cacheKey = `${repoId}:${dirPath}:${commitSetHash(commitIds)}`;
+  const cached = directoryMetricCache.get(cacheKey);
+  if (cached) return cached;
 
-  const dirPath = filter.path.replace(/\/$/, ''); // strip trailing slash
-  // Match files directly in the directory or any subdirectory
   const prefix = dirPath + '/';
   const escapedPrefix = prefix.replace(/[%_\\]/g, '\\$&');
   const pathCond = "(fd.file_path = ? OR fd.file_path LIKE ? ESCAPE '\\')";
@@ -301,8 +324,9 @@ export function computeDirectoryMetrics(
 
   const raw = aggregate(db, commitIds, pathCond, extraParams);
   const authors = aggregateByAuthor(db, repoId, commitIds, pathCond, extraParams);
-
-  return buildResult(raw, authors, setSize, repoId);
+  const result = buildResult(raw, authors, setSize, repoId);
+  rememberDirectoryMetric(cacheKey, result);
+  return result;
 }
 
 /**
@@ -408,6 +432,92 @@ export function computeChildrenMetrics(
 }
 
 // ─── Convenience: list all known file/directory paths ────────────────────────
+
+export interface FileMetricSummary {
+  path: string;
+  linesAdded: number;
+  linesRemoved: number;
+  growth: number;
+  churn: number;
+  modifications: number;
+  modificationFrequency: number;
+  churnRate: number;
+}
+
+export function computeAllFileMetrics(
+  repoId: number,
+  filter: FilterOptions
+): FileMetricSummary[] {
+  const db = getDb();
+  const unfiltered = !filter.authorEmail && !filter.startDate && !filter.endDate
+    && !(filter.commitHashes?.length);
+
+  if (unfiltered) {
+    const commitCount = (db.prepare(
+      'SELECT COUNT(*) AS count FROM commits WHERE repo_id = ?'
+    ).get(repoId) as { count: number }).count;
+    const rows = db.prepare(`
+      SELECT file_path AS path,
+             total_added AS linesAdded,
+             total_removed AS linesRemoved,
+             total_churn AS churn,
+             total_modifications AS modifications
+      FROM file_stats
+      WHERE repo_id = ?
+      ORDER BY total_churn DESC
+    `).all(repoId) as {
+      path: string;
+      linesAdded: number;
+      linesRemoved: number;
+      churn: number;
+      modifications: number;
+    }[];
+    if (rows.length || commitCount === 0) {
+      return rows.map(row => ({
+        ...row,
+        growth: row.linesAdded - row.linesRemoved,
+        modificationFrequency: commitCount > 0 ? row.modifications / commitCount : 0,
+        churnRate: commitCount > 0 ? row.churn / commitCount : 0,
+      }));
+    }
+  }
+
+  const { commitIds, setSize } = resolveCommitIds(repoId, filter);
+  if (!commitIds.length) return [];
+  db.exec('CREATE TEMP TABLE IF NOT EXISTS _cids (id INTEGER PRIMARY KEY)');
+  db.exec('DELETE FROM _cids');
+  const insert = db.prepare('INSERT OR IGNORE INTO _cids (id) VALUES (?)');
+  db.transaction((ids: number[]) => {
+    for (const id of ids) insert.run(id);
+  })(commitIds);
+
+  const rows = db.prepare(`
+    SELECT fd.file_path AS path,
+           SUM(fd.lines_added) AS linesAdded,
+           SUM(fd.lines_removed) AS linesRemoved,
+           COUNT(DISTINCT CASE WHEN fd.lines_added + fd.lines_removed > 0
+                               THEN fd.commit_id END) AS modifications
+    FROM file_diffs fd
+    INNER JOIN _cids ON _cids.id = fd.commit_id
+    GROUP BY fd.file_path
+    ORDER BY SUM(fd.lines_added) + SUM(fd.lines_removed) DESC
+  `).all() as {
+    path: string;
+    linesAdded: number;
+    linesRemoved: number;
+    modifications: number;
+  }[];
+  return rows.map(row => {
+    const churn = row.linesAdded + row.linesRemoved;
+    return {
+      ...row,
+      growth: row.linesAdded - row.linesRemoved,
+      churn,
+      modificationFrequency: setSize > 0 ? row.modifications / setSize : 0,
+      churnRate: setSize > 0 ? churn / setSize : 0,
+    };
+  });
+}
 
 export interface DirectoryMetricSummary {
   path: string;

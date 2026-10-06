@@ -51,6 +51,19 @@ export interface CommitRow {
   linesRemoved: number;
 }
 
+export interface CommitFileDiff {
+  path: string;
+  linesAdded: number;
+  linesRemoved: number;
+  churn: number;
+}
+
+export interface ChildMetric extends CommitFileDiff {
+  name: string;
+  type: 'file' | 'directory';
+  modifications: number;
+}
+
 export interface CommitResponse {
   commits: CommitRow[];
   total: number;
@@ -62,6 +75,26 @@ export interface CommitResponse {
 export interface PathResponse {
   files: string[];
   directories: string[];
+}
+
+export interface CanonicalAuthor {
+  canonical_email: string;
+  canonical_name: string;
+  commit_count: number;
+  total_churn: number;
+  owned_files_count: number;
+}
+
+export interface AuthorAnalytics {
+  weekly: { week: string; commits: number; churn: number }[];
+  topFiles: {
+    path: string;
+    churn: number;
+    otherChurn: number;
+    totalChurn: number;
+    modifications: number;
+    ownership: number;
+  }[];
 }
 
 export interface RawAuthor {

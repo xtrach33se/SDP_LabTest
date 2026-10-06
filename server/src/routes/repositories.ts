@@ -3,9 +3,37 @@ import multer from 'multer';
 import { getDb } from '../db';
 import { ingestZip, ingestUrl } from '../services/ingestor';
 import { IngestionProgress } from '../types';
+import { DuplicateRepositoryError } from '../services/gitParser';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 },
+  fileFilter: (_req, file, callback) => {
+    callback(null, /\.zip$/i.test(file.originalname));
+  },
+});
+
+function normaliseUrl(value: string): string {
+  return value.trim().replace(/\/$/, '').replace(/\.git$/i, '').toLowerCase();
+}
+
+function isGitUrl(value: string): boolean {
+  return /^(https?:\/\/|ssh:\/\/|git@)[^\s]+$/i.test(value.trim());
+}
+
+function ingestionFailure(error: unknown): IngestionProgress {
+  const duplicate = error instanceof DuplicateRepositoryError ? error : null;
+  return {
+    repoId: null,
+    stage: 'error',
+    message: error instanceof Error ? error.message : 'Repository ingestion failed.',
+    current: 0,
+    total: 0,
+    code: duplicate ? 'DUPLICATE_REPOSITORY' : 'INGESTION_FAILED',
+    existingRepoId: duplicate?.existingRepoId,
+  };
+}
 
 // In-memory SSE progress store: jobId → list of SSE clients
 const progressClients = new Map<string, Response[]>();
@@ -40,16 +68,14 @@ router.get('/', (_req: Request, res: Response) => {
 // POST /api/repositories/upload — ingest a ZIP file
 router.post('/upload', upload.single('repo'), async (req: Request, res: Response) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const name = (req.body.name as string) || req.file.originalname.replace(/\.zip$/i, '');
+    if (!req.file) return res.status(400).json({ error: 'Choose a valid .zip repository archive.' });
+    const name = String(req.body.name || req.file.originalname.replace(/\.zip$/i, '')).trim();
+    const force = req.body.force === 'true';
     const jobId = `zip-${Date.now()}`;
     res.json({ jobId });
 
-    ingestZip(req.file.buffer, name, (p) => broadcastProgress(jobId, p)).catch((err) =>
-      broadcastProgress(jobId, {
-        repoId: null, stage: 'error',
-        message: (err as Error).message, current: 0, total: 0,
-      })
+    ingestZip(req.file.buffer, name, p => broadcastProgress(jobId, p), force).catch(error =>
+      broadcastProgress(jobId, ingestionFailure(error))
     );
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -59,17 +85,30 @@ router.post('/upload', upload.single('repo'), async (req: Request, res: Response
 // POST /api/repositories/clone — ingest a remote URL
 router.post('/clone', async (req: Request, res: Response) => {
   try {
-    const { url, name } = req.body as { url?: string; name?: string };
-    if (!url) return res.status(400).json({ error: 'url is required' });
-    const repoName = name || url.split('/').pop()?.replace(/\.git$/, '') || 'repo';
+    const { url, name, force = false } = req.body as { url?: string; name?: string; force?: boolean };
+    if (!url || !isGitUrl(url)) {
+      return res.status(400).json({ error: 'Enter a valid HTTPS, SSH, or git@ repository URL.' });
+    }
+
+    const db = getDb();
+    const existing = (db.prepare('SELECT id, url FROM repositories WHERE url IS NOT NULL').all() as {
+      id: number;
+      url: string;
+    }[]).find(repo => normaliseUrl(repo.url) === normaliseUrl(url));
+    if (existing && !force) {
+      return res.status(409).json({
+        error: 'This repository URL has already been imported.',
+        code: 'DUPLICATE_REPOSITORY',
+        existingRepoId: existing.id,
+      });
+    }
+
+    const repoName = name?.trim() || url.split('/').pop()?.replace(/\.git$/, '') || 'repo';
     const jobId = `clone-${Date.now()}`;
     res.json({ jobId });
 
-    ingestUrl(url, repoName, (p) => broadcastProgress(jobId, p)).catch((err) =>
-      broadcastProgress(jobId, {
-        repoId: null, stage: 'error',
-        message: (err as Error).message, current: 0, total: 0,
-      })
+    ingestUrl(url.trim(), repoName, p => broadcastProgress(jobId, p), force).catch(error =>
+      broadcastProgress(jobId, ingestionFailure(error))
     );
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });

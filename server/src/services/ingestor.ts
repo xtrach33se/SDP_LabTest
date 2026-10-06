@@ -53,7 +53,8 @@ function findGitRoot(dir: string, depth = 0): string | null {
 export async function ingestZip(
   zipBuffer: Buffer,
   repoName: string,
-  onProgress?: (p: IngestionProgress) => void
+  onProgress?: (p: IngestionProgress) => void,
+  force = false
 ): Promise<number> {
   const tmpDir = mkTempDir('zip');
   try {
@@ -75,7 +76,7 @@ export async function ingestZip(
       );
     }
 
-    const repoId = await parseRepository(gitRoot, repoName, null, onProgress);
+    const repoId = await parseRepository(gitRoot, repoName, null, onProgress, { force });
     return repoId;
   } finally {
     rmDir(tmpDir);
@@ -106,7 +107,8 @@ function extractZip(buffer: Buffer, targetDir: string): Promise<void> {
 export async function ingestUrl(
   url: string,
   repoName: string,
-  onProgress?: (p: IngestionProgress) => void
+  onProgress?: (p: IngestionProgress) => void,
+  force = false
 ): Promise<number> {
   const tmpDir = mkTempDir('clone');
   try {
@@ -121,7 +123,7 @@ export async function ingestUrl(
     const git = simpleGit();
     await git.clone(url, tmpDir, ['--no-local']);
 
-    const repoId = await parseRepository(tmpDir, repoName, url, onProgress);
+    const repoId = await parseRepository(tmpDir, repoName, url, onProgress, { force });
     return repoId;
   } finally {
     rmDir(tmpDir);

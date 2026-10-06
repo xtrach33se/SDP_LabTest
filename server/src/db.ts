@@ -26,9 +26,10 @@ function initSchema(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS repositories (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       name       TEXT    NOT NULL,
-      path       TEXT,
-      url        TEXT,
-      created_at INTEGER NOT NULL
+      path        TEXT,
+      url         TEXT,
+      root_commit TEXT,
+      created_at  INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS commits (
@@ -50,6 +51,19 @@ function initSchema(db: Database.Database): void {
       lines_added   INTEGER NOT NULL DEFAULT 0,
       lines_removed INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (commit_id) REFERENCES commits(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS file_stats (
+      repo_id             INTEGER NOT NULL,
+      file_path           TEXT    NOT NULL,
+      total_added         INTEGER NOT NULL DEFAULT 0,
+      total_removed       INTEGER NOT NULL DEFAULT 0,
+      total_churn         INTEGER NOT NULL DEFAULT 0,
+      total_modifications INTEGER NOT NULL DEFAULT 0,
+      first_commit_ts     INTEGER NOT NULL,
+      last_commit_ts      INTEGER NOT NULL,
+      PRIMARY KEY (repo_id, file_path),
+      FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS author_merges (
@@ -79,6 +93,42 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_commits_hash       ON commits(repo_id, hash);
     CREATE INDEX IF NOT EXISTS idx_file_diffs_commit  ON file_diffs(commit_id);
     CREATE INDEX IF NOT EXISTS idx_file_diffs_path    ON file_diffs(file_path);
+    CREATE INDEX IF NOT EXISTS idx_file_diffs_path_commit ON file_diffs(file_path, commit_id);
+    CREATE INDEX IF NOT EXISTS idx_file_stats_churn   ON file_stats(repo_id, total_churn DESC);
     CREATE INDEX IF NOT EXISTS idx_author_merges_repo ON author_merges(repo_id, merged_email);
   `);
+
+  const repositoryColumns = db.pragma('table_info(repositories)') as { name: string }[];
+  if (!repositoryColumns.some(column => column.name === 'root_commit')) {
+    db.exec('ALTER TABLE repositories ADD COLUMN root_commit TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_repositories_root ON repositories(root_commit)');
+
+  // One-time compatibility backfill for repositories imported before file_stats existed.
+  const missingStats = db.prepare(`
+    SELECT r.id
+    FROM repositories r
+    WHERE EXISTS (SELECT 1 FROM commits c WHERE c.repo_id = r.id)
+      AND NOT EXISTS (SELECT 1 FROM file_stats fs WHERE fs.repo_id = r.id)
+  `).all() as { id: number }[];
+  const backfill = db.prepare(`
+    INSERT OR IGNORE INTO file_stats
+      (repo_id, file_path, total_added, total_removed, total_churn,
+       total_modifications, first_commit_ts, last_commit_ts)
+    SELECT c.repo_id,
+           fd.file_path,
+           SUM(fd.lines_added),
+           SUM(fd.lines_removed),
+           SUM(fd.lines_added + fd.lines_removed),
+           COUNT(DISTINCT CASE WHEN fd.lines_added + fd.lines_removed > 0 THEN c.id END),
+           MIN(c.timestamp),
+           MAX(c.timestamp)
+    FROM file_diffs fd
+    INNER JOIN commits c ON c.id = fd.commit_id
+    WHERE c.repo_id = ?
+    GROUP BY c.repo_id, fd.file_path
+  `);
+  db.transaction((repoIds: { id: number }[]) => {
+    for (const repo of repoIds) backfill.run(repo.id);
+  })(missingStats);
 }

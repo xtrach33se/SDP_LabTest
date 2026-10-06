@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db';
+import { clearMetricCache } from '../services/metrics';
 
 const router = Router({ mergeParams: true });
 
@@ -35,19 +36,50 @@ router.get('/canonical', (req: Request, res: Response) => {
     const repoId = Number(req.params.repoId);
     const db = getDb();
     const rows = db.prepare(`
-      SELECT
-        COALESCE(am.canonical_email, c.author_email) AS canonical_email,
-        COALESCE(am.canonical_name,  c.author_name)  AS canonical_name,
-        COUNT(DISTINCT c.id)                         AS commit_count
-      FROM commits c
-      LEFT JOIN author_merges am
-             ON am.repo_id      = c.repo_id
-            AND am.merged_email = c.author_email
-      WHERE c.repo_id = ?
-      GROUP BY
-        COALESCE(am.canonical_email, c.author_email),
-        COALESCE(am.canonical_name, c.author_name)
-      ORDER BY commit_count DESC
+      WITH identity_diffs AS (
+        SELECT c.id AS commit_id,
+               COALESCE(am.canonical_email, c.author_email) AS canonical_email,
+               COALESCE(am.canonical_name, c.author_name) AS canonical_name,
+               fd.file_path,
+               COALESCE(fd.lines_added + fd.lines_removed, 0) AS churn
+        FROM commits c
+        LEFT JOIN author_merges am
+               ON am.repo_id = c.repo_id
+              AND am.merged_email = c.author_email
+        LEFT JOIN file_diffs fd ON fd.commit_id = c.id
+        WHERE c.repo_id = ?
+      ),
+      totals AS (
+        SELECT canonical_email, canonical_name,
+               COUNT(DISTINCT commit_id) AS commit_count,
+               SUM(churn) AS total_churn
+        FROM identity_diffs
+        GROUP BY canonical_email, canonical_name
+      ),
+      file_ranks AS (
+        SELECT canonical_email, canonical_name, file_path,
+               ROW_NUMBER() OVER (
+                 PARTITION BY file_path
+                 ORDER BY SUM(churn) DESC
+               ) AS owner_rank
+        FROM identity_diffs
+        WHERE file_path IS NOT NULL
+        GROUP BY canonical_email, canonical_name, file_path
+      ),
+      owned AS (
+        SELECT canonical_email, canonical_name, COUNT(*) AS owned_files_count
+        FROM file_ranks
+        WHERE owner_rank = 1
+        GROUP BY canonical_email, canonical_name
+      )
+      SELECT totals.canonical_email,
+             totals.canonical_name,
+             totals.commit_count,
+             totals.total_churn,
+             COALESCE(owned.owned_files_count, 0) AS owned_files_count
+      FROM totals
+      LEFT JOIN owned USING (canonical_email, canonical_name)
+      ORDER BY totals.total_churn DESC
     `).all(repoId);
     res.json(rows);
   } catch (err) {
@@ -90,6 +122,7 @@ router.post('/merge', (req: Request, res: Response) => {
       }
     });
     insertAll(mergedEmails);
+    clearMetricCache(repoId);
     res.json({ ok: true, merged: mergedEmails.length });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -100,8 +133,10 @@ router.post('/merge', (req: Request, res: Response) => {
 router.delete('/merge/:id', (req: Request, res: Response) => {
   try {
     const db = getDb();
+    const repoId = Number(req.params.repoId);
     db.prepare('DELETE FROM author_merges WHERE id = ? AND repo_id = ?')
-      .run(Number(req.params.id), Number(req.params.repoId));
+      .run(Number(req.params.id), repoId);
+    clearMetricCache(repoId);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -157,6 +192,7 @@ router.post('/apply-mailmap', (req: Request, res: Response) => {
     });
 
     const applied = applyAll();
+    clearMetricCache(repoId);
     res.json({ ok: true, applied });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });

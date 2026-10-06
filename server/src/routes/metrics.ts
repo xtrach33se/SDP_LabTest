@@ -6,6 +6,7 @@ import {
   computeRepositoryMetrics,
   computeChildrenMetrics,
   computeAllDirectoryMetrics,
+  computeAllFileMetrics,
   resolveCommitIds,
   listAllFilePaths,
   listAllDirectoryPaths,
@@ -88,45 +89,19 @@ router.get('/children', (req: Request, res: Response) => {
   }
 });
 
-// GET /api/metrics/:repoId/files — all files with their metrics (sorted by churn)
+// GET /api/metrics/:repoId/files — all files, optionally streamed as NDJSON
 router.get('/files', (req: Request, res: Response) => {
   try {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
-    const { commitIds, setSize } = resolveCommitIds(repoId, filter);
-
-    if (commitIds.length === 0) return res.json([]);
-
-    const db = getDb();
-    db.exec('CREATE TEMP TABLE IF NOT EXISTS _cids (id INTEGER PRIMARY KEY)');
-    db.exec('DELETE FROM _cids');
-    const ins = db.prepare('INSERT OR IGNORE INTO _cids (id) VALUES (?)');
-    const insMany = db.transaction((ids: number[]) => { for (const id of ids) ins.run(id); });
-    insMany(commitIds);
-
-    const rows = db.prepare(`
-      SELECT
-        fd.file_path,
-        COALESCE(SUM(fd.lines_added),   0) AS linesAdded,
-        COALESCE(SUM(fd.lines_removed), 0) AS linesRemoved,
-        COUNT(DISTINCT CASE WHEN (fd.lines_added + fd.lines_removed) > 0
-                            THEN fd.commit_id END) AS modifications
-      FROM file_diffs fd
-      INNER JOIN _cids ON _cids.id = fd.commit_id
-      GROUP BY fd.file_path
-      ORDER BY (SUM(fd.lines_added) + SUM(fd.lines_removed)) DESC
-    `).all() as { file_path: string; linesAdded: number; linesRemoved: number; modifications: number }[];
-
-    const result = rows.map(r => ({
-      path: r.file_path,
-      linesAdded: r.linesAdded,
-      linesRemoved: r.linesRemoved,
-      growth: r.linesAdded - r.linesRemoved,
-      churn: r.linesAdded + r.linesRemoved,
-      modifications: r.modifications,
-      modificationFrequency: setSize > 0 ? r.modifications / setSize : 0,
-      churnRate: setSize > 0 ? (r.linesAdded + r.linesRemoved) / setSize : 0,
-    }));
+    const result = computeAllFileMetrics(repoId, filter);
+    if (req.query.stream === '1') {
+      res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.flushHeaders();
+      for (const metric of result) res.write(`${JSON.stringify(metric)}\n`);
+      return res.end();
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -164,6 +139,77 @@ router.get('/authors', (req: Request, res: Response) => {
       ownership: totalChurn > 0 ? a.churn / totalChurn : 0,
     }));
     res.json(authors);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// GET /api/metrics/:repoId/commits/:hash/files — per-file commit breakdown
+router.get('/commits/:hash/files', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT fd.file_path AS path,
+             fd.lines_added AS linesAdded,
+             fd.lines_removed AS linesRemoved,
+             fd.lines_added + fd.lines_removed AS churn
+      FROM file_diffs fd
+      INNER JOIN commits c ON c.id = fd.commit_id
+      WHERE c.repo_id = ? AND c.hash = ?
+      ORDER BY churn DESC, fd.file_path
+    `).all(Number(req.params.repoId), req.params.hash);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// GET /api/metrics/:repoId/author-analytics?authorEmail=...
+router.get('/author-analytics', (req: Request, res: Response) => {
+  try {
+    const repoId = Number(req.params.repoId);
+    const filter = parseFilter(req.query as Record<string, unknown>);
+    if (!filter.authorEmail) return res.status(400).json({ error: 'authorEmail is required' });
+    const { commitIds } = resolveCommitIds(repoId, filter);
+    if (!commitIds.length) return res.json({ weekly: [], topFiles: [] });
+
+    const db = getDb();
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS _cids (id INTEGER PRIMARY KEY)');
+    db.exec('DELETE FROM _cids');
+    const insert = db.prepare('INSERT OR IGNORE INTO _cids (id) VALUES (?)');
+    db.transaction((ids: number[]) => { for (const id of ids) insert.run(id); })(commitIds);
+
+    const weekly = db.prepare(`
+      SELECT strftime('%Y-%W', c.timestamp, 'unixepoch') AS week,
+             COUNT(DISTINCT c.id) AS commits,
+             COALESCE(SUM(fd.lines_added + fd.lines_removed), 0) AS churn
+      FROM commits c
+      INNER JOIN _cids ON _cids.id = c.id
+      LEFT JOIN file_diffs fd ON fd.commit_id = c.id
+      GROUP BY week
+      ORDER BY week
+    `).all();
+    const authorFiles = db.prepare(`
+      SELECT fd.file_path AS path,
+             SUM(fd.lines_added + fd.lines_removed) AS churn,
+             COUNT(DISTINCT fd.commit_id) AS modifications
+      FROM file_diffs fd
+      INNER JOIN _cids ON _cids.id = fd.commit_id
+      GROUP BY fd.file_path
+      ORDER BY churn DESC
+      LIMIT 10
+    `).all() as { path: string; churn: number; modifications: number }[];
+    const totals = computeAllFileMetrics(repoId, { ...filter, authorEmail: undefined });
+    const totalByPath = new Map(totals.map(row => [row.path, row.churn]));
+    const topFiles = authorFiles.map(row => ({
+      ...row,
+      totalChurn: totalByPath.get(row.path) ?? row.churn,
+      otherChurn: Math.max(0, (totalByPath.get(row.path) ?? row.churn) - row.churn),
+      ownership: (totalByPath.get(row.path) ?? 0) > 0
+        ? row.churn / (totalByPath.get(row.path) ?? row.churn)
+        : 0,
+    }));
+    res.json({ weekly, topFiles });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -237,6 +283,24 @@ router.get('/timeline', (req: Request, res: Response) => {
     const insMany = db.transaction((ids: number[]) => { for (const id of ids) ins.run(id); });
     insMany(commitIds);
 
+    let pathWhere = '';
+    const pathParams: unknown[] = [];
+    if (filter.path) {
+      const exactFile = db.prepare(`
+        SELECT 1 FROM file_diffs fd
+        INNER JOIN commits c ON c.id = fd.commit_id
+        WHERE c.repo_id = ? AND fd.file_path = ? LIMIT 1
+      `).get(repoId, filter.path);
+      if (exactFile) {
+        pathWhere = 'WHERE fd.file_path = ?';
+        pathParams.push(filter.path);
+      } else {
+        const escaped = `${filter.path.replace(/\/$/, '')}/`.replace(/[%_\\]/g, '\\$&');
+        pathWhere = "WHERE fd.file_path LIKE ? ESCAPE '\\'";
+        pathParams.push(`${escaped}%`);
+      }
+    }
+
     const rows = db.prepare(`
       SELECT
         c.hash,
@@ -245,10 +309,11 @@ router.get('/timeline', (req: Request, res: Response) => {
         COALESCE(SUM(fd.lines_removed), 0) AS linesRemoved
       FROM commits c
       INNER JOIN _cids ON _cids.id = c.id
-      LEFT  JOIN file_diffs fd ON fd.commit_id = c.id
+      LEFT JOIN file_diffs fd ON fd.commit_id = c.id
+      ${pathWhere}
       GROUP BY c.id
       ORDER BY c.timestamp ASC
-    `).all() as { hash: string; timestamp: number; linesAdded: number; linesRemoved: number }[];
+    `).all(...pathParams) as { hash: string; timestamp: number; linesAdded: number; linesRemoved: number }[];
 
     const result = rows.map(r => ({
       hash: r.hash,

@@ -5,3 +5,4 @@ server/data/
 tmp/
 .env
 .DS_Store
+inspect-*.png
