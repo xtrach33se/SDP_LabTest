@@ -2,13 +2,20 @@
   "name": "rat",
   "private": true,
   "scripts": {
+    "setup": "npm install && npm install --prefix server && npm install --prefix client",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:server": "cd server && npm run dev",
-    "dev:client": "cd client && npm run dev",
-    "build": "cd client && npm run build && cd ../server && npm run build",
-    "start": "cd server && npm start"
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client && npm run build --prefix server",
+    "start": "NODE_ENV=production npm start --prefix server",
+    "test": "npm test --prefix server",
+    "verify": "ts-node --project scripts/tsconfig.json scripts/verify-metrics.ts",
+    "verify:cjson": "npm run verify -- --repo=cjson"
   },
   "devDependencies": {
-    "concurrently": "^8.2.0"
+    "@types/node": "^20.11.0",
+    "concurrently": "^8.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
   }
 }

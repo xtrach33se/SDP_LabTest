@@ -4,6 +4,7 @@ import { getDb } from '../db';
 import { ingestZip, ingestUrl } from '../services/ingestor';
 import { IngestionProgress } from '../types';
 import { DuplicateRepositoryError } from '../services/gitParser';
+import { AppError, errorDetails } from '../errors';
 
 const router = Router();
 const upload = multer({
@@ -24,13 +25,14 @@ function isGitUrl(value: string): boolean {
 
 function ingestionFailure(error: unknown): IngestionProgress {
   const duplicate = error instanceof DuplicateRepositoryError ? error : null;
+  const details = errorDetails(error);
   return {
     repoId: null,
     stage: 'error',
-    message: error instanceof Error ? error.message : 'Repository ingestion failed.',
+    message: details.message,
     current: 0,
     total: 0,
-    code: duplicate ? 'DUPLICATE_REPOSITORY' : 'INGESTION_FAILED',
+    code: (error instanceof AppError ? error.code : 'INGESTION_FAILED') as IngestionProgress['code'],
     existingRepoId: duplicate?.existingRepoId,
   };
 }
@@ -68,7 +70,7 @@ router.get('/', (_req: Request, res: Response) => {
 // POST /api/repositories/upload — ingest a ZIP file
 router.post('/upload', upload.single('repo'), async (req: Request, res: Response) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Choose a valid .zip repository archive.' });
+    if (!req.file) return res.status(400).json({ error: 'Choose a valid .zip repository archive.', code: 'INVALID_ZIP' });
     const name = String(req.body.name || req.file.originalname.replace(/\.zip$/i, '')).trim();
     const force = req.body.force === 'true';
     const jobId = `zip-${Date.now()}`;
@@ -78,7 +80,8 @@ router.post('/upload', upload.single('repo'), async (req: Request, res: Response
       broadcastProgress(jobId, ingestionFailure(error))
     );
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    const details = errorDetails(err);
+    res.status(details.status).json({ error: details.message, code: details.code });
   }
 });
 
@@ -87,7 +90,7 @@ router.post('/clone', async (req: Request, res: Response) => {
   try {
     const { url, name, force = false } = req.body as { url?: string; name?: string; force?: boolean };
     if (!url || !isGitUrl(url)) {
-      return res.status(400).json({ error: 'Enter a valid HTTPS, SSH, or git@ repository URL.' });
+      return res.status(400).json({ error: 'Enter a valid HTTPS, SSH, or git@ repository URL.', code: 'INVALID_URL' });
     }
 
     const db = getDb();
@@ -111,7 +114,8 @@ router.post('/clone', async (req: Request, res: Response) => {
       broadcastProgress(jobId, ingestionFailure(error))
     );
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    const details = errorDetails(err);
+    res.status(details.status).json({ error: details.message, code: details.code });
   }
 });
 
@@ -125,15 +129,56 @@ router.get('/:id', (req: Request, res: Response) => {
     WHERE r.id = ?
     GROUP BY r.id
   `).get(Number(req.params.id));
-  if (!repo) return res.status(404).json({ error: 'Repository not found' });
+  if (!repo) return res.status(404).json({ error: 'Repository not found.', code: 'REPOSITORY_NOT_FOUND' });
   res.json(repo);
+});
+
+// PATCH /api/repositories/:id — rename a repository
+router.patch('/:id', (req: Request, res: Response) => {
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return res.status(400).json({ error: 'Repository name is required.', code: 'INVALID_NAME' });
+  const result = getDb().prepare('UPDATE repositories SET name = ? WHERE id = ?').run(name, Number(req.params.id));
+  if (!result.changes) return res.status(404).json({ error: 'Repository not found.', code: 'REPOSITORY_NOT_FOUND' });
+  res.json({ ok: true, name });
+});
+
+// GET /api/repositories/:id/stats — ingestion and index statistics
+router.get('/:id/stats', (req: Request, res: Response) => {
+  const stats = getDb().prepare(`
+    SELECT r.id, r.name, r.url, r.created_at, r.ingestion_started_at, r.ingestion_completed_at,
+           COUNT(DISTINCT c.id) AS commit_count,
+           COUNT(DISTINCT fd.file_path) AS file_count,
+           COUNT(DISTINCT c.author_email || char(0) || c.author_name) AS author_count,
+           COALESCE(SUM(fd.lines_added), 0) AS lines_added,
+           COALESCE(SUM(fd.lines_removed), 0) AS lines_removed
+    FROM repositories r
+    LEFT JOIN commits c ON c.repo_id = r.id
+    LEFT JOIN file_diffs fd ON fd.commit_id = c.id
+    WHERE r.id = ?
+    GROUP BY r.id
+  `).get(Number(req.params.id));
+  if (!stats) return res.status(404).json({ error: 'Repository not found.', code: 'REPOSITORY_NOT_FOUND' });
+  res.json(stats);
+});
+
+// POST /api/repositories/:id/reingest — refresh a URL-backed repository
+router.post('/:id/reingest', (req: Request, res: Response) => {
+  const row = getDb().prepare('SELECT name, url FROM repositories WHERE id = ?').get(Number(req.params.id)) as { name: string; url: string | null } | undefined;
+  if (!row) return res.status(404).json({ error: 'Repository not found.', code: 'REPOSITORY_NOT_FOUND' });
+  if (!row.url) return res.status(400).json({ error: 'Uploaded ZIP repositories must be uploaded again from the Add repository page.', code: 'REUPLOAD_REQUIRED' });
+  const jobId = `reingest-${Date.now()}`;
+  res.json({ jobId });
+  ingestUrl(row.url, row.name, progress => broadcastProgress(jobId, progress), true).catch(error =>
+    broadcastProgress(jobId, ingestionFailure(error))
+  );
 });
 
 // DELETE /api/repositories/:id — remove a repository and all its data
 router.delete('/:id', (req: Request, res: Response) => {
   const db = getDb();
   const id = Number(req.params.id);
-  db.prepare('DELETE FROM repositories WHERE id = ?').run(id);
+  const result = db.prepare('DELETE FROM repositories WHERE id = ?').run(id);
+  if (!result.changes) return res.status(404).json({ error: 'Repository not found.', code: 'REPOSITORY_NOT_FOUND' });
   res.json({ ok: true });
 });
 

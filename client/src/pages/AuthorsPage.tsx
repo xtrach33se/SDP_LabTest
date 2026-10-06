@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Check, ChevronDown, GitMerge, MailCheck, Trash2, Users } from 'lucide-react';
+import { Check, ChevronDown, Download, GitMerge, MailCheck, Trash2, Users } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { authorsApi, metricsApi } from '../api';
 import { useFilters } from '../context/FilterContext';
+import { downloadCsv } from '../utils/csv';
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
@@ -60,14 +61,14 @@ export default function AuthorsPage() {
     <div className="mx-auto max-w-[1500px] px-4 py-7 sm:px-6 lg:px-8">
       <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-300"><Users className="h-3.5 w-3.5" /> Ownership intelligence</div><h1 className="text-2xl font-bold tracking-tight text-white">Authors</h1><p className="mt-1.5 text-sm text-slate-600">Compare canonical contributors and consolidate alternate identities.</p></div>
-        <button onClick={() => mailmapMutation.mutate()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-2.5 text-sm font-semibold text-slate-300 hover:border-violet-400/30 hover:text-white"><MailCheck className="h-4 w-4 text-violet-300" /> Apply .mailmap</button>
+        <div className="flex gap-2"><button onClick={() => downloadCsv('rat-authors.csv', canonical.map(author => ({ name: author.canonical_name, email: author.canonical_email, commits: author.commit_count, churn: author.total_churn, ownedFiles: author.owned_files_count })))} disabled={!canonical.length} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] px-4 py-2.5 text-sm font-semibold text-slate-400 disabled:opacity-30"><Download className="h-4 w-4" /> Export CSV</button><button onClick={() => mailmapMutation.mutate()} className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-4 py-2.5 text-sm font-semibold text-slate-300 hover:border-violet-400/30 hover:text-white"><MailCheck className="h-4 w-4 text-violet-300" /> Apply .mailmap</button></div>
       </div>
 
       <section className="panel mb-4 overflow-hidden">
         <div className="border-b border-white/[0.06] px-5 py-4"><h2 className="section-title">Canonical authors</h2><p className="section-subtitle">Select an author to compare their contribution against everyone else</p></div>
         <div className="overflow-x-auto">
           <div className="min-w-[760px] divide-y divide-white/[0.045]">
-            {canonical.map(author => {
+            {isLoading ? Array.from({ length: 5 }, (_, index) => <div key={index} className="mx-5 my-2 h-14 animate-pulse rounded-xl bg-white/[0.025]" />) : canonical.map(author => {
               const key = `${author.canonical_email}-${author.canonical_name}`;
               const expanded = expandedAuthor === key;
               const identities = authors.filter(raw => raw.canonical_email === author.canonical_email && raw.canonical_name === author.canonical_name);

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { repositoriesApi } from '../api';
 
 export default function RepositoriesPage() {
-  const { data: repositories = [], isLoading } = useQuery({ queryKey: ['repositories'], queryFn: repositoriesApi.list });
+  const { data: repositories = [], isLoading, isError } = useQuery({ queryKey: ['repositories'], queryFn: repositoriesApi.list });
 
   return (
     <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
@@ -19,6 +19,8 @@ export default function RepositoriesPage() {
 
       {isLoading ? (
         <div className="grid gap-4 md:grid-cols-2">{[1, 2].map(i => <div key={i} className="h-44 animate-pulse rounded-2xl border border-white/[0.06] bg-white/[0.025]" />)}</div>
+      ) : isError ? (
+        <div className="rounded-2xl border border-rose-500/20 bg-rose-500/[0.05] p-8 text-center text-sm text-rose-300">The repository list could not be loaded. Check that the API server is running.</div>
       ) : repositories.length ? (
         <div className="grid gap-4 md:grid-cols-2">
           {repositories.map(repo => (

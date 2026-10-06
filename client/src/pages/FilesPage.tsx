@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronRight, FileCode2, FolderTree } from 'lucide-react';
+import { ChevronRight, Download, FileCode2, FolderTree } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useParams } from 'react-router-dom';
 import { metricsApi } from '../api';
 import FileExplorerTree from '../components/FileExplorerTree';
+import MetricLabel from '../components/MetricLabel';
+import { toast } from '../components/Toast';
 import { useFilters } from '../context/FilterContext';
+import { downloadCsv } from '../utils/csv';
 import type { FileMetric } from '../types';
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
-function MetricCard({ label, value, tone = 'text-white' }: { label: string; value: string; tone?: string }) {
+function MetricCard({ label, value, tone = 'text-white', queryTime }: { label: string; value: string; tone?: string; queryTime?: number }) {
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-700">{label}</p>
+      <div className="flex items-center justify-between"><p className="text-[10px] font-semibold uppercase tracking-wider text-slate-700"><MetricLabel>{label}</MetricLabel></p>{window.location.hostname === 'localhost' && queryTime != null && <span className="rounded bg-cyan-400/10 px-1.5 py-0.5 font-mono text-[9px] text-cyan-400">{queryTime.toFixed(1)} ms</span>}</div>
       <p className={`mt-2 text-xl font-bold ${tone}`}>{value}</p>
     </div>
   );
@@ -37,7 +40,7 @@ export default function FilesPage() {
     metricsApi.streamFiles(repoId, { ...filters, path: '' }, item => {
       setStreamedFiles(current => [...current, item]);
     }, controller.signal).catch(error => {
-      if ((error as Error).name !== 'AbortError') console.error(error);
+      if ((error as Error).name !== 'AbortError') toast.error(error instanceof Error ? error.message : 'Unable to stream file metrics.');
     }).finally(() => setStreaming(false));
     return () => controller.abort();
   }, [repoId, filters.authorEmail, filters.startDate, filters.endDate, filters.commitHashes]);
@@ -78,12 +81,13 @@ export default function FilesPage() {
     setFilters(current => ({ ...current, path }));
   }
 
+  if (pathsQuery.isLoading) return <div className="p-8"><div className="grid gap-4 xl:grid-cols-[340px_1fr]"><div className="h-[650px] animate-pulse rounded-2xl bg-white/[0.025]" /><div className="h-[650px] animate-pulse rounded-2xl bg-white/[0.025]" /></div></div>;
+
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-7 sm:px-6 lg:px-8">
-      <div className="mb-6">
-        <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-300"><FolderTree className="h-3.5 w-3.5" /> Object explorer</div>
-        <h1 className="text-2xl font-bold text-white">Files & directories</h1>
-        <p className="mt-1.5 text-sm text-slate-600">Inspect volatility, ownership, and change history at any path.</p>
+      <div className="mb-6 flex items-end justify-between gap-4">
+        <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-300"><FolderTree className="h-3.5 w-3.5" /> Object explorer</div><h1 className="text-2xl font-bold text-white">Files & directories</h1><p className="mt-1.5 text-sm text-slate-600">Inspect volatility, ownership, and change history at any path.</p></div>
+        <button disabled={!streamedFiles.length} onClick={() => downloadCsv('rat-files.csv', streamedFiles.map(file => ({ path: file.path, linesAdded: file.linesAdded, linesRemoved: file.linesRemoved, growth: file.growth, churn: file.churn, modifications: file.modifications, modificationFrequency: file.modificationFrequency, churnRate: file.churnRate })))} className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-400 disabled:opacity-30"><Download className="h-4 w-4" /> Export CSV</button>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
@@ -114,13 +118,13 @@ export default function FilesPage() {
               </section>
 
               <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="Lines added" value={compact.format(metric?.linesAdded ?? 0)} tone="text-emerald-400" />
-                <MetricCard label="Lines removed" value={compact.format(metric?.linesRemoved ?? 0)} tone="text-rose-400" />
-                <MetricCard label="Net growth" value={compact.format(metric?.growth ?? 0)} tone="text-cyan-300" />
-                <MetricCard label="Total churn" value={compact.format(metric?.churn ?? 0)} tone="text-violet-300" />
-                <MetricCard label="Modifications" value={(metric?.modifications ?? 0).toLocaleString()} />
-                <MetricCard label="Modification frequency" value={`${((metric?.modificationFrequency ?? 0) * 100).toFixed(2)}%`} />
-                <MetricCard label="Churn rate" value={(metric?.churnRate ?? 0).toFixed(2)} />
+                <MetricCard label="Lines added" value={compact.format(metric?.linesAdded ?? 0)} tone="text-emerald-400" queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Lines removed" value={compact.format(metric?.linesRemoved ?? 0)} tone="text-rose-400" queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Net growth" value={compact.format(metric?.growth ?? 0)} tone="text-cyan-300" queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Total churn" value={compact.format(metric?.churn ?? 0)} tone="text-violet-300" queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Modifications" value={(metric?.modifications ?? 0).toLocaleString()} queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Modification frequency" value={`${((metric?.modificationFrequency ?? 0) * 100).toFixed(2)}%`} queryTime={metric?.queryTimeMs} />
+                <MetricCard label="Churn rate" value={(metric?.churnRate ?? 0).toFixed(2)} queryTime={metric?.queryTimeMs} />
               </section>
 
               <div className="grid gap-4 lg:grid-cols-2">

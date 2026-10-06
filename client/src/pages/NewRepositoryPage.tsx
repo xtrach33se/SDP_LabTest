@@ -82,7 +82,7 @@ export default function NewRepositoryPage() {
         message: body?.error || 'Unable to start ingestion.',
         current: 0,
         total: 0,
-        code: body?.code === 'DUPLICATE_REPOSITORY' ? 'DUPLICATE_REPOSITORY' : 'INGESTION_FAILED',
+        code: (body?.code as IngestionProgress['code']) ?? 'INGESTION_FAILED',
         existingRepoId: body?.existingRepoId,
       });
     }

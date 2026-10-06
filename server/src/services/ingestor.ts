@@ -6,6 +6,7 @@ import { simpleGit } from 'simple-git';
 import unzipper from 'unzipper';
 import { parseRepository } from './gitParser';
 import { IngestionProgress } from '../types';
+import { AppError } from '../errors';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,19 @@ function findGitRoot(dir: string, depth = 0): string | null {
   return null;
 }
 
+export async function ingestPath(
+  repoPath: string,
+  repoName: string,
+  repoUrl: string | null = null,
+  onProgress?: (p: IngestionProgress) => void,
+  force = false
+): Promise<number> {
+  if (!fs.existsSync(repoPath)) {
+    throw new AppError('The repository path does not exist.', 'INVALID_REPOSITORY', 400);
+  }
+  return parseRepository(repoPath, repoName, repoUrl, onProgress, { force });
+}
+
 // ─── ZIP ingestion ────────────────────────────────────────────────────────────
 
 /**
@@ -66,13 +80,18 @@ export async function ingestZip(
       total: 0,
     });
 
-    await extractZip(zipBuffer, tmpDir);
+    try {
+      await extractZip(zipBuffer, tmpDir);
+    } catch {
+      throw new AppError('The uploaded file is not a readable ZIP archive.', 'INVALID_ZIP', 400);
+    }
 
     const gitRoot = findGitRoot(tmpDir);
     if (!gitRoot) {
-      throw new Error(
-        'No .git directory found inside the zip file. ' +
-          'Please upload a zip of a full git repository.'
+      throw new AppError(
+        'No .git directory was found. Upload a ZIP of a complete Git working tree.',
+        'INVALID_ZIP',
+        400
       );
     }
 
@@ -121,7 +140,19 @@ export async function ingestUrl(
     });
 
     const git = simpleGit();
-    await git.clone(url, tmpDir, ['--no-local']);
+    try {
+      await git.clone(url, tmpDir, ['--no-local']);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      const unreachable = /could not resolve|unable to access|timed out|connection/i.test(detail);
+      throw new AppError(
+        unreachable
+          ? 'The remote repository could not be reached. Check the URL and network connection.'
+          : 'Git could not clone this repository. Confirm that it is public and the URL is valid.',
+        unreachable ? 'UNREACHABLE_URL' : 'GIT_CLONE_FAILED',
+        400
+      );
+    }
 
     const repoId = await parseRepository(tmpDir, repoName, url, onProgress, { force });
     return repoId;

@@ -46,7 +46,7 @@ router.get('/repository', (req: Request, res: Response) => {
     const result = computeRepositoryMetrics(repoId, filter);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -55,11 +55,11 @@ router.get('/file', (req: Request, res: Response) => {
   try {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
-    if (!filter.path) return res.status(400).json({ error: 'path query param is required' });
+    if (!filter.path) return res.status(400).json({ error: 'path query param is required', code: 'PATH_REQUIRED' });
     const result = computeFileMetrics(repoId, filter);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -68,11 +68,11 @@ router.get('/directory', (req: Request, res: Response) => {
   try {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
-    if (!filter.path) return res.status(400).json({ error: 'path query param is required' });
+    if (!filter.path) return res.status(400).json({ error: 'path query param is required', code: 'PATH_REQUIRED' });
     const result = computeDirectoryMetrics(repoId, filter);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -81,11 +81,11 @@ router.get('/children', (req: Request, res: Response) => {
   try {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
-    if (!filter.path) return res.status(400).json({ error: 'path query param is required' });
+    if (!filter.path) return res.status(400).json({ error: 'path query param is required', code: 'PATH_REQUIRED' });
     const result = computeChildrenMetrics(repoId, filter);
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -104,7 +104,7 @@ router.get('/files', (req: Request, res: Response) => {
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -115,7 +115,7 @@ router.get('/directories', (req: Request, res: Response) => {
     const filter = parseFilter(req.query as Record<string, unknown>);
     res.json(computeAllDirectoryMetrics(repoId, filter));
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -140,7 +140,7 @@ router.get('/authors', (req: Request, res: Response) => {
     }));
     res.json(authors);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -160,7 +160,7 @@ router.get('/commits/:hash/files', (req: Request, res: Response) => {
     `).all(Number(req.params.repoId), req.params.hash);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -169,7 +169,7 @@ router.get('/author-analytics', (req: Request, res: Response) => {
   try {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
-    if (!filter.authorEmail) return res.status(400).json({ error: 'authorEmail is required' });
+    if (!filter.authorEmail) return res.status(400).json({ error: 'authorEmail is required', code: 'AUTHOR_REQUIRED' });
     const { commitIds } = resolveCommitIds(repoId, filter);
     if (!commitIds.length) return res.json({ weekly: [], topFiles: [] });
 
@@ -211,7 +211,7 @@ router.get('/author-analytics', (req: Request, res: Response) => {
     }));
     res.json({ weekly, topFiles });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -221,7 +221,7 @@ router.get('/commits', (req: Request, res: Response) => {
     const repoId = Number(req.params.repoId);
     const filter = parseFilter(req.query as Record<string, unknown>);
     const page = Math.max(1, Number(req.query.page) || 1);
-    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
+    const pageSize = Math.min(10_000, Math.max(1, Number(req.query.pageSize) || 50));
     const search = typeof req.query.search === 'string' ? req.query.search : '';
     const offset = (page - 1) * pageSize;
 
@@ -264,7 +264,7 @@ router.get('/commits', (req: Request, res: Response) => {
 
     res.json({ commits: rows, total, page, pageSize, setSize });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -325,7 +325,7 @@ router.get('/timeline', (req: Request, res: Response) => {
     }));
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 
@@ -337,7 +337,7 @@ router.get('/paths', (req: Request, res: Response) => {
     const dirs = listAllDirectoryPaths(repoId);
     res.json({ files, directories: dirs });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'METRICS_ERROR' });
   }
 });
 

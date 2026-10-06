@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { VariableSizeList, type ListChildComponentProps } from 'react-window';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, FileCode2, GitCommitHorizontal, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Download, FileCode2, GitCommitHorizontal, Search } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { metricsApi } from '../api';
 import { useFilters } from '../context/FilterContext';
+import { downloadCsv } from '../utils/csv';
 import type { CommitRow } from '../types';
 
 interface RowData {
@@ -80,6 +81,10 @@ export default function CommitsPage() {
     setExpandedHash(current => current === hash ? '' : hash);
     listRef.current?.resetAfterIndex(index);
   }
+  async function exportCsv() {
+    const result = await metricsApi.commits(repoId, browserFilters, 1, 10_000, search);
+    downloadCsv('rat-commits.csv', result.commits.map(commit => ({ hash: commit.hash, author: commit.author_name, email: commit.author_email, date: new Date(commit.timestamp * 1000).toISOString(), message: commit.message, linesAdded: commit.linesAdded, linesRemoved: commit.linesRemoved, churn: commit.linesAdded + commit.linesRemoved })));
+  }
 
   const rowData: RowData = {
     commits: data?.commits ?? [],
@@ -94,13 +99,13 @@ export default function CommitsPage() {
     <div className="mx-auto max-w-[1500px] px-4 py-7 sm:px-6 lg:px-8">
       <div className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-300"><GitCommitHorizontal className="h-3.5 w-3.5" /> History explorer</div><h1 className="text-2xl font-bold text-white">Commits</h1><p className="mt-1.5 text-sm text-slate-600">Search, inspect file-level diffs, and build a precise commit set.</p></div>
-        <div className="flex flex-wrap gap-2"><button onClick={selectVisible} className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white">Select visible</button>{localSelected.length > 0 && <button onClick={() => setLocalSelected([])} className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-500 hover:text-white">Clear selection</button>}<button onClick={() => setFilters(current => ({ ...current, commitHashes: localSelected }))} disabled={!localSelected.length} className="rounded-xl bg-violet-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-30">Use {localSelected.length} selected</button></div>
+        <div className="flex flex-wrap gap-2"><button onClick={exportCsv} className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white"><Download className="h-4 w-4" /> Export CSV</button><button onClick={selectVisible} className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white">Select visible</button>{localSelected.length > 0 && <button onClick={() => setLocalSelected([])} className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-500 hover:text-white">Clear selection</button>}<button onClick={() => setFilters(current => ({ ...current, commitHashes: localSelected }))} disabled={!localSelected.length} className="rounded-xl bg-violet-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-30">Use {localSelected.length} selected</button></div>
       </div>
 
       <section className="panel overflow-hidden">
         <div className="flex items-center justify-between gap-4 border-b border-white/[0.06] px-5 py-4"><div className="relative max-w-md flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-600" /><input value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} className="input h-9 w-full pl-9" placeholder="Search message, author, or email…" /></div><span className="text-xs text-slate-600">{data?.total.toLocaleString() ?? 0} commits</span></div>
         <div className="grid grid-cols-[36px_92px_minmax(220px,1fr)_150px_105px_70px_70px_24px] gap-2 border-b border-white/[0.05] px-5 py-3 text-[10px] uppercase tracking-wider text-slate-700"><span /><span>Commit</span><span>Message</span><span>Author</span><span>Date</span><span>Added</span><span>Removed</span><span /></div>
-        {isLoading ? <p className="p-12 text-center text-sm text-slate-600">Loading commit history…</p> : (
+        {isLoading ? <div className="space-y-2 p-4">{Array.from({ length: 7 }, (_, index) => <div key={index} className="h-14 animate-pulse rounded-xl bg-white/[0.025]" />)}</div> : (
           <VariableSizeList
             ref={listRef}
             height={Math.min(650, Math.max(160, (data?.commits.length ?? 0) * 65))}

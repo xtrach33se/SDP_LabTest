@@ -26,7 +26,7 @@ router.get('/', (req: Request, res: Response) => {
     `).all(repoId);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 
@@ -83,7 +83,7 @@ router.get('/canonical', (req: Request, res: Response) => {
     `).all(repoId);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 
@@ -125,7 +125,7 @@ router.post('/merge', (req: Request, res: Response) => {
     clearMetricCache(repoId);
     res.json({ ok: true, merged: mergedEmails.length });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 
@@ -139,7 +139,7 @@ router.delete('/merge/:id', (req: Request, res: Response) => {
     clearMetricCache(repoId);
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 
@@ -153,7 +153,7 @@ router.get('/merges', (req: Request, res: Response) => {
     `).all(repoId);
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 
@@ -195,7 +195,7 @@ router.post('/apply-mailmap', (req: Request, res: Response) => {
     clearMetricCache(repoId);
     res.json({ ok: true, applied });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({ error: (err as Error).message, code: 'AUTHORS_ERROR' });
   }
 });
 

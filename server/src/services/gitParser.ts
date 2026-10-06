@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getDb } from '../db';
 import { IngestionProgress } from '../types';
+import { AppError } from '../errors';
 
 interface MailmapRule {
   canonicalName: string | null;
@@ -18,11 +19,9 @@ export interface ParseRepositoryOptions {
   useWorker?: boolean;
 }
 
-export class DuplicateRepositoryError extends Error {
-  readonly code = 'DUPLICATE_REPOSITORY';
-
+export class DuplicateRepositoryError extends AppError {
   constructor(readonly existingRepoId: number) {
-    super(`This Git history is already indexed as repository ${existingRepoId}.`);
+    super(`This Git history is already indexed as repository ${existingRepoId}.`, 'DUPLICATE_REPOSITORY', 409);
     this.name = 'DuplicateRepositoryError';
   }
 }
@@ -119,7 +118,6 @@ function streamGitLog(
       'log',
       `--format=${format}`,
       '--numstat',
-      '--diff-filter=ACDMRT',
     ], { cwd: repoPath });
     const rl = readline.createInterface({ input: proc.stdout, crlfDelay: Infinity });
 
@@ -184,14 +182,34 @@ export async function parseRepositoryInProcess(
   onProgress?: (progress: IngestionProgress) => void,
   options: ParseRepositoryOptions = {}
 ): Promise<number> {
+  if (!fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git'))) {
+    throw new AppError('The selected path is not a readable Git working tree.', 'INVALID_REPOSITORY', 400);
+  }
   const db = getDb();
-  const [rootOutput, countOutput] = await Promise.all([
-    readGitValue(repoPath, ['rev-list', '--max-parents=0', 'HEAD']),
-    readGitValue(repoPath, ['rev-list', '--count', 'HEAD']),
-  ]);
+  const ingestionStartedAt = Math.floor(Date.now() / 1000);
+  let rootOutput: string;
+  let countOutput: string;
+  try {
+    const allCount = Number.parseInt(
+      await readGitValue(repoPath, ['rev-list', '--all', '--count']),
+      10
+    ) || 0;
+    if (allCount === 0) {
+      throw new AppError('The repository has no commits to analyse.', 'EMPTY_REPOSITORY', 400);
+    }
+    [rootOutput, countOutput] = await Promise.all([
+      readGitValue(repoPath, ['rev-list', '--max-parents=0', 'HEAD']),
+      readGitValue(repoPath, ['rev-list', '--count', 'HEAD']),
+    ]);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw new AppError('Unable to read the repository history.', 'GIT_READ_FAILED', 400);
+  }
   const rootCommit = rootOutput.split('\n').filter(Boolean).sort()[0];
   const totalCommits = Number.parseInt(countOutput, 10) || 0;
-  if (!rootCommit) throw new Error('The repository has no readable root commit.');
+  if (!rootCommit || totalCommits === 0) {
+    throw new AppError('The repository has no commits to analyse.', 'EMPTY_REPOSITORY', 400);
+  }
 
   const rootDuplicate = db.prepare(
     'SELECT id FROM repositories WHERE root_commit = ? LIMIT 1'
@@ -210,9 +228,10 @@ export async function parseRepositoryInProcess(
   }
 
   const repoResult = db.prepare(`
-    INSERT INTO repositories (name, path, url, root_commit, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(repoName, repoPath, repoUrl, rootCommit, Math.floor(Date.now() / 1000));
+    INSERT INTO repositories
+      (name, path, url, root_commit, created_at, ingestion_started_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(repoName, repoPath, repoUrl, rootCommit, ingestionStartedAt, ingestionStartedAt);
   const repoId = Number(repoResult.lastInsertRowid);
 
   const mailmapPath = path.join(repoPath, '.mailmap');
@@ -324,6 +343,9 @@ export async function parseRepositoryInProcess(
       current: totalInserted,
       total: totalCommits,
     });
+    db.prepare(
+      'UPDATE repositories SET ingestion_completed_at = ? WHERE id = ?'
+    ).run(Math.floor(Date.now() / 1000), repoId);
     db.pragma('optimize');
     emit(onProgress, {
       repoId,
@@ -358,6 +380,7 @@ export function parseRepository(
         repoId?: number;
         error?: string;
         code?: string;
+        status?: number;
         existingRepoId?: number;
       }) => {
         if (message.type === 'progress' && message.progress) onProgress?.(message.progress);
@@ -365,7 +388,9 @@ export function parseRepository(
         if (message.type === 'error') {
           const error = message.code === 'DUPLICATE_REPOSITORY' && message.existingRepoId
             ? new DuplicateRepositoryError(message.existingRepoId)
-            : new Error(message.error || 'Git parser worker failed');
+            : message.code
+              ? new AppError(message.error || 'Git parser worker failed', message.code, message.status ?? 500)
+              : new Error(message.error || 'Git parser worker failed');
           reject(error);
         }
       });

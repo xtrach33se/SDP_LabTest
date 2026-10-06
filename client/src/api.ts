@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import type {
   AuthorAnalytics,
   AuthorMerge,
@@ -13,10 +13,18 @@ import type {
   PathResponse,
   RawAuthor,
   Repository,
+  RepositoryStats,
   TimelinePoint,
 } from './types';
 
 export const api = axios.create({ baseURL: '/api' });
+
+function withQueryTime<T>(response: AxiosResponse<T>): T {
+  if (response.data && typeof response.data === 'object' && !Array.isArray(response.data)) {
+    Object.assign(response.data as object, { queryTimeMs: Number(response.headers['x-query-time-ms'] ?? 0) });
+  }
+  return response.data;
+}
 
 export function filterParams(filters: Filters): URLSearchParams {
   const params = new URLSearchParams();
@@ -31,7 +39,10 @@ export function filterParams(filters: Filters): URLSearchParams {
 export const repositoriesApi = {
   list: () => api.get<Repository[]>('/repositories').then(r => r.data),
   get: (id: number) => api.get<Repository>(`/repositories/${id}`).then(r => r.data),
+  stats: (id: number) => api.get<RepositoryStats>(`/repositories/${id}/stats`).then(r => r.data),
+  rename: (id: number, name: string) => api.patch(`/repositories/${id}`, { name }).then(r => r.data),
   remove: (id: number) => api.delete(`/repositories/${id}`).then(r => r.data),
+  reingest: (id: number) => api.post<{ jobId: string }>(`/repositories/${id}/reingest`).then(r => r.data),
   clone: (url: string, name: string, force = false) => api.post<{ jobId: string }>('/repositories/clone', { url, name, force }).then(r => r.data),
   upload: (file: File, name: string, force = false, onProgress?: (percent: number) => void) => {
     const body = new FormData();
@@ -47,9 +58,9 @@ export const repositoriesApi = {
 };
 
 export const metricsApi = {
-  repository: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/repository`, { params: filterParams(filters) }).then(r => r.data),
-  file: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/file`, { params: filterParams(filters) }).then(r => r.data),
-  directory: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/directory`, { params: filterParams(filters) }).then(r => r.data),
+  repository: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/repository`, { params: filterParams(filters) }).then(withQueryTime),
+  file: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/file`, { params: filterParams(filters) }).then(withQueryTime),
+  directory: (id: number, filters: Filters) => api.get<MetricResult>(`/metrics/${id}/directory`, { params: filterParams(filters) }).then(withQueryTime),
   files: (id: number, filters: Filters) => api.get<FileMetric[]>(`/metrics/${id}/files`, { params: filterParams(filters) }).then(r => r.data),
   directories: (id: number, filters: Filters) => api.get<FileMetric[]>(`/metrics/${id}/directories`, { params: filterParams(filters) }).then(r => r.data),
   children: (id: number, filters: Filters) => api.get<ChildMetric[]>(`/metrics/${id}/children`, { params: filterParams(filters) }).then(r => r.data),

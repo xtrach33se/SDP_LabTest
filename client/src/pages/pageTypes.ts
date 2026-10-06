@@ -4,6 +4,6 @@ export interface IngestionProgress {
   message: string;
   current: number;
   total: number;
-  code?: 'DUPLICATE_REPOSITORY' | 'INVALID_REPOSITORY' | 'INGESTION_FAILED';
+  code?: 'DUPLICATE_REPOSITORY' | 'INVALID_REPOSITORY' | 'INVALID_ZIP' | 'UNREACHABLE_URL' | 'GIT_CLONE_FAILED' | 'EMPTY_REPOSITORY' | 'INGESTION_FAILED';
   existingRepoId?: number;
 }

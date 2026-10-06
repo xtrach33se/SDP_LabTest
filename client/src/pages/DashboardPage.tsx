@@ -25,6 +25,7 @@ import {
   YAxis,
 } from 'recharts';
 import { metricsApi } from '../api';
+import MetricLabel from '../components/MetricLabel';
 import { useFilters } from '../context/FilterContext';
 import type { FileMetric, TimelinePoint } from '../types';
 
@@ -49,7 +50,7 @@ function aggregateTimeline(points: TimelinePoint[], unit: 'day' | 'week' | 'mont
   return [...map.values()];
 }
 
-function Card({ label, value, detail, tone = 'violet', icon: Icon }: { label: string; value: string; detail: string; tone?: 'violet' | 'cyan' | 'green' | 'rose'; icon: typeof Zap }) {
+function Card({ label, value, detail, tone = 'violet', icon: Icon, queryTime }: { label: string; value: string; detail: string; tone?: 'violet' | 'cyan' | 'green' | 'rose'; icon: typeof Zap; queryTime?: number }) {
   const tones = {
     violet: 'text-violet-300 bg-violet-400/[0.08] border-violet-400/15',
     cyan: 'text-cyan-300 bg-cyan-400/[0.08] border-cyan-400/15',
@@ -59,8 +60,8 @@ function Card({ label, value, detail, tone = 'violet', icon: Icon }: { label: st
   return (
     <div className="panel group p-5">
       <div className="flex items-start justify-between">
-        <span className="text-xs font-medium text-slate-500">{label}</span>
-        <span className={`grid h-8 w-8 place-items-center rounded-lg border ${tones[tone]}`}><Icon className="h-4 w-4" /></span>
+        <span className="text-xs font-medium text-slate-500"><MetricLabel>{label}</MetricLabel></span>
+        <div className="flex items-center gap-2">{window.location.hostname === 'localhost' && queryTime != null && <span className="rounded bg-cyan-400/10 px-1.5 py-0.5 font-mono text-[9px] text-cyan-400">{queryTime.toFixed(1)} ms</span>}<span className={`grid h-8 w-8 place-items-center rounded-lg border ${tones[tone]}`}><Icon className="h-4 w-4" /></span></div>
       </div>
       <p className="mt-4 text-2xl font-bold tracking-tight text-white">{value}</p>
       <p className="mt-1 truncate text-[11px] text-slate-600">{detail}</p>
@@ -140,13 +141,13 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        <Card label="Commits" value={number.format(commitsQuery.data?.total ?? 0)} detail="Selected commit set" icon={GitCommitHorizontal} />
-        <Card label="Lines added" value={`+${number.format(metric?.linesAdded ?? 0)}`} detail="Across all changes" tone="green" icon={ArrowUpRight} />
-        <Card label="Lines removed" value={`−${number.format(metric?.linesRemoved ?? 0)}`} detail="Across all changes" tone="rose" icon={ArrowDownRight} />
-        <Card label="Net growth" value={number.format(metric?.growth ?? 0)} detail="Added minus removed" tone="cyan" icon={MoveRight} />
-        <Card label="Total churn" value={number.format(metric?.churn ?? 0)} detail="Code movement volume" icon={Zap} />
-        <Card label="Top author" value={topAuthor?.name ?? '—'} detail={topAuthor ? `${(topAuthor.ownership * 100).toFixed(1)}% ownership` : 'No activity'} tone="cyan" icon={Users} />
-        <Card label="Most volatile" value={topFile?.path.split('/').pop() ?? '—'} detail={topFile ? `${number.format(topFile.churnRate)} lines / commit` : 'No files'} tone="rose" icon={FileCode2} />
+        <Card label="Commits" value={number.format(commitsQuery.data?.total ?? 0)} detail="Selected commit set" icon={GitCommitHorizontal} queryTime={metric?.queryTimeMs} />
+        <Card label="Lines added" value={`+${number.format(metric?.linesAdded ?? 0)}`} detail="Across all changes" tone="green" icon={ArrowUpRight} queryTime={metric?.queryTimeMs} />
+        <Card label="Lines removed" value={`−${number.format(metric?.linesRemoved ?? 0)}`} detail="Across all changes" tone="rose" icon={ArrowDownRight} queryTime={metric?.queryTimeMs} />
+        <Card label="Net growth" value={number.format(metric?.growth ?? 0)} detail="Added minus removed" tone="cyan" icon={MoveRight} queryTime={metric?.queryTimeMs} />
+        <Card label="Total churn" value={number.format(metric?.churn ?? 0)} detail="Code movement volume" icon={Zap} queryTime={metric?.queryTimeMs} />
+        <Card label="Top author" value={topAuthor?.name ?? '—'} detail={topAuthor ? `${(topAuthor.ownership * 100).toFixed(1)}% ownership` : 'No activity'} tone="cyan" icon={Users} queryTime={metric?.queryTimeMs} />
+        <Card label="Most volatile" value={topFile?.path.split('/').pop() ?? '—'} detail={topFile ? `${number.format(topFile.churnRate)} lines / commit` : 'No files'} tone="rose" icon={FileCode2} queryTime={metric?.queryTimeMs} />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,.8fr)]">

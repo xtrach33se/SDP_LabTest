@@ -2,17 +2,17 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DB_DIR, 'rat.db');
+const DEFAULT_DB_DIR = path.join(__dirname, '..', 'data');
 
 let _db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (_db) return _db;
 
-  fs.mkdirSync(DB_DIR, { recursive: true });
+  const dbPath = process.env.RAT_DB_PATH || path.join(DEFAULT_DB_DIR, 'rat.db');
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  _db = new Database(DB_PATH);
+  _db = new Database(dbPath);
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
   _db.pragma('synchronous = NORMAL');
@@ -28,8 +28,10 @@ function initSchema(db: Database.Database): void {
       name       TEXT    NOT NULL,
       path        TEXT,
       url         TEXT,
-      root_commit TEXT,
-      created_at  INTEGER NOT NULL
+      root_commit           TEXT,
+      created_at            INTEGER NOT NULL,
+      ingestion_started_at  INTEGER,
+      ingestion_completed_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS commits (
@@ -99,8 +101,15 @@ function initSchema(db: Database.Database): void {
   `);
 
   const repositoryColumns = db.pragma('table_info(repositories)') as { name: string }[];
-  if (!repositoryColumns.some(column => column.name === 'root_commit')) {
-    db.exec('ALTER TABLE repositories ADD COLUMN root_commit TEXT');
+  const migrations = [
+    ['root_commit', 'TEXT'],
+    ['ingestion_started_at', 'INTEGER'],
+    ['ingestion_completed_at', 'INTEGER'],
+  ] as const;
+  for (const [column, type] of migrations) {
+    if (!repositoryColumns.some(existing => existing.name === column)) {
+      db.exec(`ALTER TABLE repositories ADD COLUMN ${column} ${type}`);
+    }
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_repositories_root ON repositories(root_commit)');
 
@@ -131,4 +140,11 @@ function initSchema(db: Database.Database): void {
   db.transaction((repoIds: { id: number }[]) => {
     for (const repo of repoIds) backfill.run(repo.id);
   })(missingStats);
+}
+
+/** Close the active connection. Primarily used by deterministic tests. */
+export function closeDb(): void {
+  if (!_db) return;
+  _db.close();
+  _db = null;
 }

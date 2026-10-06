@@ -3,6 +3,7 @@ import {
   DuplicateRepositoryError,
   parseRepositoryInProcess,
 } from '../services/gitParser';
+import { AppError } from '../errors';
 
 interface WorkerInput {
   repoPath: string;
@@ -26,7 +27,8 @@ parseRepositoryInProcess(
   parentPort?.postMessage({
     type: 'error',
     error: error instanceof Error ? error.message : 'Git parser worker failed',
-    code: duplicate?.code,
+    code: error instanceof AppError ? error.code : undefined,
+    status: error instanceof AppError ? error.status : undefined,
     existingRepoId: duplicate?.existingRepoId,
   });
 });

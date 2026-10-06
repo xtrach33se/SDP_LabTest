@@ -4,7 +4,23 @@ export interface Repository {
   path: string | null;
   url: string | null;
   created_at: number;
+  ingestion_started_at?: number | null;
+  ingestion_completed_at?: number | null;
   commit_count: number;
+}
+
+export interface RepositoryStats {
+  id: number;
+  name: string;
+  url: string | null;
+  created_at: number;
+  ingestion_started_at: number | null;
+  ingestion_completed_at: number | null;
+  commit_count: number;
+  file_count: number;
+  author_count: number;
+  lines_added: number;
+  lines_removed: number;
 }
 
 export interface AuthorMetric {
@@ -26,6 +42,7 @@ export interface MetricResult {
   modificationFrequency: number;
   churnRate: number;
   authors: AuthorMetric[];
+  queryTimeMs?: number;
 }
 
 export interface FileMetric extends Omit<MetricResult, 'authors'> {

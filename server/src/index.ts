@@ -1,17 +1,28 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { performance } from 'node:perf_hooks';
 import { getDb } from './db';
 import repositoriesRouter from './routes/repositories';
 import metricsRouter from './routes/metrics';
 import authorsRouter from './routes/authors';
+import { AppError, errorDetails } from './errors';
 
 const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({ origin: process.env.NODE_ENV === 'production' ? false : 'http://localhost:5173' }));
 app.use(express.json({ limit: '10mb' }));
+app.use((_req, res, next) => {
+  const started = performance.now();
+  const sendJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    res.setHeader('X-Query-Time-Ms', (performance.now() - started).toFixed(2));
+    return sendJson(body);
+  }) as typeof res.json;
+  next();
+});
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/repositories', repositoriesRouter);
@@ -21,6 +32,10 @@ app.use('/api/authors/:repoId', authorsRouter);
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, ts: Date.now() });
+});
+
+app.use('/api', (_req, _res, next) => {
+  next(new AppError('API endpoint not found.', 'NOT_FOUND', 404));
 });
 
 // ─── Serve built frontend in production ───────────────────────────────────────
@@ -33,9 +48,10 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // ─── Global error handler ─────────────────────────────────────────────────────
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('[unhandled error]', err.message);
-  res.status(500).json({ error: err.message });
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const details = errorDetails(err);
+  if (details.status >= 500) console.error('[unhandled error]', err);
+  res.status(details.status).json({ error: details.message, code: details.code });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

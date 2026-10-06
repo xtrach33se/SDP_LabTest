@@ -6,3 +6,9 @@ tmp/
 .env
 .DS_Store
 inspect-*.png
+.verification/
+.verification-repos/
+coverage/
+*.log
+.vscode/
+.idea/
